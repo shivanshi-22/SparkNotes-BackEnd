@@ -167,11 +167,11 @@ async def test_summarize_only():
         summary = generate_summary_using_openrouter(test_content)
         
         return {
-            "status": "✅ SUCCESS" if summary and "Unable to generate AI summary" not in summary else "⚠️ FALLBACK",
+            "status": "✅ SUCCESS" if summary and "Unable to generate AI summary" not in summary and "API key not configured" not in summary else "⚠️ FALLBACK",
             "test_content": test_content,
             "summary_result": summary,
             "summary_length": len(summary) if summary else 0,
-            "is_fallback": "Unable to generate AI summary" in summary if summary else True
+            "is_fallback": any(phrase in summary for phrase in ["Unable to generate AI summary", "API key not configured", "covers important information"]) if summary else True
         }
     except Exception as e:
         print(f"❌ Summarize test error: {e}")
@@ -184,7 +184,7 @@ async def test_summarize_only():
 @debug_router.post("/test-all-services")
 async def test_all_services():
     """Test all three services with sample data"""
-    test_content = "Machine learning is a subset of artificial intelligence (AI) that focuses on algorithms that can learn and make decisions from data. It includes supervised learning, unsupervised learning, and reinforcement learning."
+    test_content = "Machine learning is a subset of artificial intelligence (AI) that focuses on algorithms that can learn and make decisions from data. It includes supervised learning, unsupervised learning, and reinforcement learning. Deep learning uses neural networks with multiple layers."
     
     results = {}
     
@@ -192,10 +192,11 @@ async def test_all_services():
     try:
         from app.services.summarize import generate_summary_using_openrouter
         summary = generate_summary_using_openrouter(test_content)
+        is_success = summary and not any(phrase in summary for phrase in ["Unable to generate AI summary", "API key not configured", "covers important information"])
         results["summarization"] = {
-            "status": "✅ SUCCESS" if summary and "Unable to generate AI summary" not in summary else "⚠️ FALLBACK",
+            "status": "✅ SUCCESS" if is_success else "⚠️ FALLBACK",
             "result": summary,
-            "is_fallback": "Unable to generate AI summary" in summary if summary else True
+            "is_fallback": not is_success
         }
     except Exception as e:
         results["summarization"] = {"status": "❌ ERROR", "error": str(e)}
@@ -204,8 +205,9 @@ async def test_all_services():
     try:
         from app.services.flashcard_generator import generate_flashcards_using_openrouter
         flashcards = generate_flashcards_using_openrouter(test_content)
+        is_success = flashcards and len(flashcards) > 0 and all('question' in fc and 'answer' in fc for fc in flashcards)
         results["flashcards"] = {
-            "status": "✅ SUCCESS" if flashcards and len(flashcards) > 0 else "❌ FAILED",
+            "status": "✅ SUCCESS" if is_success else "❌ FAILED",
             "result": flashcards,
             "count": len(flashcards) if flashcards else 0
         }
@@ -216,18 +218,129 @@ async def test_all_services():
     try:
         from app.services.quiz_generator import generate_quiz_using_openrouter
         quiz = generate_quiz_using_openrouter(test_content)
+        is_success = quiz and len(quiz) > 0 and all('question' in q and 'options' in q and 'answer' in q for q in quiz)
         results["quiz"] = {
-            "status": "✅ SUCCESS" if quiz and len(quiz) > 0 else "❌ FAILED",
+            "status": "✅ SUCCESS" if is_success else "❌ FAILED",
             "result": quiz,
             "count": len(quiz) if quiz else 0
         }
     except Exception as e:
         results["quiz"] = {"status": "❌ ERROR", "error": str(e)}
     
+    # Overall status
+    success_count = sum(1 for r in results.values() if "SUCCESS" in r.get("status", ""))
+    total_services = len(results)
+    
     return {
         "test_content": test_content,
         "results": results,
-        "overall_status": "All services working" if all("SUCCESS" in r.get("status", "") for r in results.values()) else "Some services have issues"
+        "overall_status": f"{success_count}/{total_services} services working",
+        "all_working": success_count == total_services,
+        "summary": {
+            "working": [name for name, result in results.items() if "SUCCESS" in result.get("status", "")],
+            "failing": [name for name, result in results.items() if "ERROR" in result.get("status", "")],
+            "fallback": [name for name, result in results.items() if "FALLBACK" in result.get("status", "")]
+        }
+    }
+
+# New endpoint for comprehensive API testing
+@debug_router.post("/test-full-workflow")
+async def test_full_workflow():
+    """Test the complete workflow as if called from frontend"""
+    test_notes = """
+    Artificial Intelligence and Machine Learning
+
+    Artificial Intelligence (AI) is the simulation of human intelligence in machines that are programmed to think and learn like humans. Machine Learning (ML) is a subset of AI that focuses on the ability of machines to receive data and learn for themselves without being explicitly programmed.
+
+    Types of Machine Learning:
+    1. Supervised Learning - uses labeled data to train algorithms
+    2. Unsupervised Learning - finds patterns in data without labels  
+    3. Reinforcement Learning - learns through interaction with environment
+
+    Deep Learning is a subset of ML that uses neural networks with multiple layers to model and understand complex patterns in data.
+    """
+    
+    workflow_results = {}
+    
+    # Test 1: Summarization API
+    try:
+        import requests
+        response = requests.post(
+            "http://localhost:8000/api/summarize",
+            json={"notes": test_notes},
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        workflow_results["summarize_api"] = {
+            "status_code": response.status_code,
+            "success": response.status_code == 200,
+            "response": response.json() if response.status_code == 200 else response.text[:200],
+            "endpoint": "/api/summarize"
+        }
+    except Exception as e:
+        workflow_results["summarize_api"] = {
+            "success": False,
+            "error": str(e),
+            "endpoint": "/api/summarize"
+        }
+    
+    # Test 2: Flashcards API
+    try:
+        response = requests.post(
+            "http://localhost:8000/api/generate-flashcards",
+            json={"notes": test_notes},
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        workflow_results["flashcards_api"] = {
+            "status_code": response.status_code,
+            "success": response.status_code == 200,
+            "response": response.json() if response.status_code == 200 else response.text[:200],
+            "endpoint": "/api/generate-flashcards"
+        }
+    except Exception as e:
+        workflow_results["flashcards_api"] = {
+            "success": False,
+            "error": str(e),
+            "endpoint": "/api/generate-flashcards"
+        }
+    
+    # Test 3: Quiz API
+    try:
+        response = requests.post(
+            "http://localhost:8000/api/generate-quiz",
+            json={"notes": test_notes},
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        workflow_results["quiz_api"] = {
+            "status_code": response.status_code,
+            "success": response.status_code == 200,
+            "response": response.json() if response.status_code == 200 else response.text[:200],
+            "endpoint": "/api/generate-quiz"
+        }
+    except Exception as e:
+        workflow_results["quiz_api"] = {
+            "success": False,
+            "error": str(e),
+            "endpoint": "/api/generate-quiz"
+        }
+    
+    # Summary
+    successful_apis = [name for name, result in workflow_results.items() if result.get("success", False)]
+    failed_apis = [name for name, result in workflow_results.items() if not result.get("success", False)]
+    
+    return {
+        "test_notes": test_notes[:200] + "..." if len(test_notes) > 200 else test_notes,
+        "workflow_results": workflow_results,
+        "summary": {
+            "total_apis": len(workflow_results),
+            "successful": len(successful_apis),
+            "failed": len(failed_apis),
+            "successful_apis": successful_apis,
+            "failed_apis": failed_apis,
+            "all_working": len(failed_apis) == 0
+        }
     }
 
 # Register all routes
@@ -248,7 +361,19 @@ async def root():
             "summarize": "/api/summarize",
             "flashcards": "/api/generate-flashcards", 
             "quiz": "/api/generate-quiz",
-            "debug": "/debug/test-api-quick"
+            "debug": "/debug/test-api-quick",
+            "full_test": "/debug/test-full-workflow"
+        },
+        "postman_collection": {
+            "base_url": "http://localhost:8000",
+            "test_endpoints": [
+                "GET /debug/env",
+                "POST /debug/test-api-quick", 
+                "POST /debug/test-full-workflow",
+                "POST /api/summarize",
+                "POST /api/generate-flashcards",
+                "POST /api/generate-quiz"
+            ]
         }
     }
 
@@ -259,5 +384,7 @@ async def health_check():
         "status": "healthy", 
         "api_key_set": api_key is not None,
         "api_key_valid_format": api_key.startswith("sk-or-v1-") if api_key else False,
-        "timestamp": "2025-07-23"
+        "timestamp": "2025-07-23",
+        "services": ["summarize", "flashcards", "quiz"],
+        "debug_endpoints": ["/debug/test-api-quick", "/debug/test-full-workflow"]
     }
