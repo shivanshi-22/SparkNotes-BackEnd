@@ -177,6 +177,6 @@ if __name__ == "__main__":
     
     if is_valid:
         # Test summarization
-        test_content = "This is a test document with multiple sentences. It contains information about various topics. The main goal is to test the summarization functionality."
+        test_content = "This is a test document with multiple sentences. The main goal is to test the summarization functionality."
         result = generate_summary_using_openrouter(test_content)
         print(f"\nTest Summary: {result}")
